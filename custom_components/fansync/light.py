@@ -84,7 +84,8 @@ async def async_setup_entry(
             if isinstance(status, dict) and (
                 KEY_LIGHT_POWER in status or KEY_LIGHT_BRIGHTNESS in status
             ):
-                profile = client.device_profile(did)
+                get_profile = getattr(client, "device_profile", None)
+                profile = get_profile(did) if callable(get_profile) else {}
                 esh = profile.get("esh") if isinstance(profile, dict) else None
                 model = esh.get("model") if isinstance(esh, dict) else None
                 color_temp_presets = resolve_light_color_temp_presets(model, status)
@@ -169,10 +170,7 @@ class FanSyncLight(FanSyncOptimisticEntity, LightEntity):
             return (
                 s.get(KEY_LIGHT_POWER) == 1
                 and (pb is None or s.get(KEY_LIGHT_BRIGHTNESS) == pb)
-                and (
-                    pk is None
-                    or normalize_color_temp_kelvin(s.get(KEY_LIGHT_COLOR_TEMP)) == pk
-                )
+                and (pk is None or normalize_color_temp_kelvin(s.get(KEY_LIGHT_COLOR_TEMP)) == pk)
             )
 
         await self._apply_with_optimism(optimistic, payload, _confirm)

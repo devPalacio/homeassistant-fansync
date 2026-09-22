@@ -120,6 +120,11 @@ async def test_corke_model_exposes_five_color_temp_presets(
     assert state.attributes.get("max_color_temp_kelvin") == 5000
     assert state.attributes.get("color_temp_kelvin") == 3500
 
+    assert mock_client._status_callback is not None
+    mock_client._status_callback("test-device", {"H00": 1})
+    await hass.async_block_till_done()
+    assert hass.states.get("light.fansync_light").attributes.get("color_temp_kelvin") == 3500
+
     await hass.services.async_call(
         "light",
         "turn_on",

@@ -161,7 +161,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: FanSyncConfigEntry) -> b
                 did = device_id or getattr(client, "device_id", None) or "unknown"
                 current = coordinator.data or {}
                 merged: dict[str, dict[str, object]] = dict(current)
-                merged[did] = status
+                previous = current.get(did)
+                if isinstance(previous, dict):
+                    device_status = dict(previous)
+                    device_status.update(status)
+                else:
+                    device_status = dict(status)
+                merged[did] = device_status
                 coordinator.async_set_updated_data(merged)
                 if _LOGGER.isEnabledFor(logging.DEBUG):
                     keys = list(status.keys()) if isinstance(status, dict) else []
