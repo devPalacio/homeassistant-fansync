@@ -31,7 +31,9 @@ from .const import (
     KEY_LIGHT_POWER,
     LIGHT_COLOR_TEMP_PRESETS_KELVIN,
     ha_brightness_to_pct,
+    normalize_color_temp_kelvin,
     pct_to_ha_brightness,
+    resolve_light_color_temp_presets,
     resolve_lightless_devices,
     snap_color_temp_kelvin,
 )
@@ -82,15 +84,19 @@ async def async_setup_entry(
             if isinstance(status, dict) and (
                 KEY_LIGHT_POWER in status or KEY_LIGHT_BRIGHTNESS in status
             ):
-                color_temp = status.get(KEY_LIGHT_COLOR_TEMP)
-                try:
-                    color_temp_kelvin = (
-                        int(color_temp) if isinstance(color_temp, int | str) else None
+                profile = client.device_profile(did)
+                esh = profile.get("esh") if isinstance(profile, dict) else None
+                model = esh.get("model") if isinstance(esh, dict) else None
+                color_temp_presets = resolve_light_color_temp_presets(model, status)
+                entities.append(
+                    FanSyncLight(
+                        coordinator,
+                        client,
+                        did,
+                        supports_color_temp=color_temp_presets is not None,
+                        color_temp_presets=color_temp_presets,
                     )
-                except ValueError:
-                    color_temp_kelvin = None
-                supports_color_temp = color_temp_kelvin in LIGHT_COLOR_TEMP_PRESETS_KELVIN
-                entities.append(FanSyncLight(coordinator, client, did, supports_color_temp))
+                )
 
     async_add_entities(entities)
 
@@ -107,16 +113,21 @@ class FanSyncLight(FanSyncOptimisticEntity, LightEntity):
         client: FanSyncClient,
         device_id: str,
         supports_color_temp: bool = False,
+        color_temp_presets: tuple[int, ...] | None = None,
     ):
         super().__init__(coordinator, client, device_id)
         self._attr_unique_id = f"{DOMAIN}_{self._device_id}_light"
-        # Fanimation exposes no capability flag, so gate on the confirmed H04 presets.
-        self._supports_color_temp = supports_color_temp
-        if supports_color_temp:
+        # Keep the old constructor keyword working for callers/tests while
+        # allowing each device to carry its own model-specific preset list.
+        if color_temp_presets is None and supports_color_temp:
+            color_temp_presets = LIGHT_COLOR_TEMP_PRESETS_KELVIN
+        self._color_temp_presets = tuple(color_temp_presets or ())
+        self._supports_color_temp = bool(self._color_temp_presets)
+        if self._supports_color_temp:
             self._attr_supported_color_modes = {ColorMode.COLOR_TEMP}
             self._attr_color_mode = ColorMode.COLOR_TEMP
-            self._attr_min_color_temp_kelvin = min(LIGHT_COLOR_TEMP_PRESETS_KELVIN)
-            self._attr_max_color_temp_kelvin = max(LIGHT_COLOR_TEMP_PRESETS_KELVIN)
+            self._attr_min_color_temp_kelvin = min(self._color_temp_presets)
+            self._attr_max_color_temp_kelvin = max(self._color_temp_presets)
         else:
             self._attr_supported_color_modes = {ColorMode.BRIGHTNESS}
             self._attr_color_mode = ColorMode.BRIGHTNESS
@@ -134,7 +145,7 @@ class FanSyncLight(FanSyncOptimisticEntity, LightEntity):
     def color_temp_kelvin(self) -> int | None:
         if not self._supports_color_temp:
             return None
-        return self._get_with_overlay(KEY_LIGHT_COLOR_TEMP, min(LIGHT_COLOR_TEMP_PRESETS_KELVIN))
+        return self._get_with_overlay(KEY_LIGHT_COLOR_TEMP, min(self._color_temp_presets))
 
     async def async_turn_on(
         self, brightness: int | None = None, color_temp_kelvin: int | None = None, **kwargs
@@ -150,20 +161,18 @@ class FanSyncLight(FanSyncOptimisticEntity, LightEntity):
 
         kelvin = None
         if color_temp_kelvin is not None and self._supports_color_temp:
-            kelvin = snap_color_temp_kelvin(color_temp_kelvin)
+            kelvin = snap_color_temp_kelvin(color_temp_kelvin, self._color_temp_presets)
             optimistic[KEY_LIGHT_COLOR_TEMP] = kelvin
             payload[KEY_LIGHT_COLOR_TEMP] = kelvin
 
         def _confirm(s: dict[str, object], pb: int | None = pct, pk: int | None = kelvin) -> bool:
-            color_temp = s.get(KEY_LIGHT_COLOR_TEMP)
-            try:
-                confirmed_kelvin = int(color_temp) if isinstance(color_temp, int | str) else None
-            except ValueError:
-                confirmed_kelvin = None
             return (
                 s.get(KEY_LIGHT_POWER) == 1
                 and (pb is None or s.get(KEY_LIGHT_BRIGHTNESS) == pb)
-                and (pk is None or confirmed_kelvin == pk)
+                and (
+                    pk is None
+                    or normalize_color_temp_kelvin(s.get(KEY_LIGHT_COLOR_TEMP)) == pk
+                )
             )
 
         await self._apply_with_optimism(optimistic, payload, _confirm)
