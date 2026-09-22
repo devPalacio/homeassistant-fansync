@@ -16,7 +16,8 @@ H04 was previously undecoded. Confirmed against a live device: switching a
 light's color in the Fanimation app between its "warm"/"natural"/"cool" presets
 moved H04 between exactly 3000/4000/5000 (Kelvin), with every other key
 unchanged. Devices without tunable lights can report other H04 values, so the
-confirmed preset values are used as the capability signal.
+confirmed preset values are used as the capability signal. Known Corke models
+add two observed presets, 2700 and 3500 K, and use a five-step profile.
 """
 
 from unittest.mock import AsyncMock, patch
@@ -87,6 +88,36 @@ async def test_color_temp_supported_when_device_reports_h04_as_string(
     state = hass.states.get("light.fansync_light")
     assert state is not None
     assert state.attributes.get("supported_color_modes") == ["color_temp"]
+
+
+async def test_color_temp_display_normalizes_integral_float_h04(
+    hass: HomeAssistant, mock_client, patch_client
+) -> None:
+    """An integral float H04 value displays the device's current preset."""
+    mock_client.status = {
+        "H00": 1,
+        "H02": 41,
+        "H06": 0,
+        "H01": 0,
+        "H0B": 1,
+        "H0C": 100,
+        "H04": 4000.0,
+    }
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="FanSync",
+        data={"email": "u@e.com", "password": "p", "verify_ssl": False},
+        unique_id="test-float-color-temp",
+    )
+    entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    state = hass.states.get("light.fansync_light")
+    assert state is not None
+    assert state.attributes.get("supported_color_modes") == ["color_temp"]
+    assert state.attributes.get("color_temp_kelvin") == 4000
 
 
 async def test_corke_model_exposes_five_color_temp_presets(

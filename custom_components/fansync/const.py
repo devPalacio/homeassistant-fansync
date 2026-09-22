@@ -33,9 +33,10 @@ KEY_LIGHT_COLOR_TEMP = "H04"
 # snapped to the nearest of these for devices without a model-specific profile.
 LIGHT_COLOR_TEMP_PRESETS_KELVIN = (3000, 4000, 5000)
 
-# The Corke fixture has five selectable CCT presets. Model names are matched by
-# normalized prefix so size/receiver suffixes (for example Corke36-FD6R1L5)
-# do not need individual entries.
+# The known Corke fixture profile has five selectable CCT presets. Model names
+# are matched by normalized prefix so size/receiver suffixes (for example
+# Corke36-FD6R1L5) do not need individual entries. Unknown models stay on the
+# legacy three-preset profile; H04 alone is not enough to infer Corke support.
 LIGHT_COLOR_TEMP_MODEL_PRESETS = {
     "corke": (2700, 3000, 3500, 4000, 5000),
 }
@@ -153,7 +154,7 @@ def normalize_color_temp_kelvin(value: object) -> int | None:
     if isinstance(value, str):
         try:
             return int(value.strip())
-        except (TypeError, ValueError):
+        except TypeError, ValueError:
             return None
     return None
 
@@ -173,9 +174,11 @@ def resolve_light_color_temp_presets(
 
     H04 is present on devices that do not have a tunable light, so presence of
     the key is not sufficient. Known model profiles select their own preset
-    list, but the current H04 value must still be one of those presets. Unknown
-    models use the original three-preset behavior only when H04 is one of the
-    known three-preset values; otherwise the light remains brightness-only.
+    list, but the current H04 value must still be one of those presets. The
+    known Corke profile provides five presets (2700/3000/3500/4000/5000 K).
+    Unknown models use the original three-preset behavior only when H04 is one
+    of the known three-preset values; otherwise the light remains
+    brightness-only.
     """
     current = normalize_color_temp_kelvin(status.get(KEY_LIGHT_COLOR_TEMP))
     if current is None:
