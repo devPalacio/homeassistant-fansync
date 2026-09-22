@@ -49,6 +49,23 @@ PARALLEL_UPDATES = 0
 _LOGGER = logging.getLogger(__name__)
 
 
+def _get_profile_model(client: object, device_id: str) -> tuple[bool, object]:
+    """Return whether the profile is ready and its model, if available."""
+    get_profile = getattr(client, "device_profile", None)
+    if not callable(get_profile):
+        return False, None
+    try:
+        profile = get_profile(device_id)
+    except Exception:
+        return False, None
+    if not isinstance(profile, dict):
+        return False, None
+    esh = profile.get("esh")
+    if not isinstance(esh, dict):
+        return False, None
+    return True, esh.get("model")
+
+
 async def async_setup_entry(
     hass: HomeAssistant,
     entry: ConfigEntry,
@@ -84,10 +101,7 @@ async def async_setup_entry(
             if isinstance(status, dict) and (
                 KEY_LIGHT_POWER in status or KEY_LIGHT_BRIGHTNESS in status
             ):
-                get_profile = getattr(client, "device_profile", None)
-                profile = get_profile(did) if callable(get_profile) else {}
-                esh = profile.get("esh") if isinstance(profile, dict) else None
-                model = esh.get("model") if isinstance(esh, dict) else None
+                _, model = _get_profile_model(client, did)
                 color_temp_presets = resolve_light_color_temp_presets(model, status)
                 entities.append(
                     FanSyncLight(
@@ -122,8 +136,15 @@ class FanSyncLight(FanSyncOptimisticEntity, LightEntity):
         # allowing each device to carry its own model-specific preset list.
         if color_temp_presets is None and supports_color_temp:
             color_temp_presets = LIGHT_COLOR_TEMP_PRESETS_KELVIN
-        self._color_temp_presets = tuple(color_temp_presets or ())
-        self._supports_color_temp = bool(self._color_temp_presets)
+        self._color_temp_presets: tuple[int, ...] = ()
+        self._set_color_temp_presets(color_temp_presets)
+
+    def _set_color_temp_presets(self, color_temp_presets: tuple[int, ...] | None) -> bool:
+        """Apply a device's CCT profile and return whether it changed."""
+        presets = tuple(color_temp_presets or ())
+        changed = presets != self._color_temp_presets
+        self._color_temp_presets = presets
+        self._supports_color_temp = bool(presets)
         if self._supports_color_temp:
             self._attr_supported_color_modes = {ColorMode.COLOR_TEMP}
             self._attr_color_mode = ColorMode.COLOR_TEMP
@@ -132,6 +153,18 @@ class FanSyncLight(FanSyncOptimisticEntity, LightEntity):
         else:
             self._attr_supported_color_modes = {ColorMode.BRIGHTNESS}
             self._attr_color_mode = ColorMode.BRIGHTNESS
+            self._attr_min_color_temp_kelvin = None
+            self._attr_max_color_temp_kelvin = None
+        return changed
+
+    def _refresh_color_temp_profile(self) -> bool:
+        """Refresh model-specific CCT support after a late profile update."""
+        profile_ready, model = _get_profile_model(self.client, self._device_id)
+        if not profile_ready:
+            return False
+        status = self._status_for(self.coordinator.data or {})
+        presets = resolve_light_color_temp_presets(model, status)
+        return self._set_color_temp_presets(presets)
 
     @property
     def is_on(self) -> bool:
@@ -192,6 +225,11 @@ class FanSyncLight(FanSyncOptimisticEntity, LightEntity):
                 status.get(KEY_LIGHT_POWER),
                 status.get(KEY_LIGHT_BRIGHTNESS),
             )
+
+    def _handle_coordinator_update(self) -> None:
+        super()._handle_coordinator_update()
+        if self._refresh_color_temp_profile():
+            self.async_write_ha_state()
 
     @property
     def icon(self) -> str | None:

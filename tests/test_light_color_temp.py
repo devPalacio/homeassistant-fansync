@@ -168,6 +168,46 @@ async def test_corke_model_exposes_five_color_temp_presets(
     assert hass.states.get("light.fansync_light").attributes.get("color_temp_kelvin") == 2700
 
 
+async def test_late_corke_profile_upgrades_existing_light(
+    hass: HomeAssistant, mock_client, patch_client
+) -> None:
+    """A profile learned after setup upgrades a Corke light to five presets."""
+    mock_client.status = {
+        "H00": 1,
+        "H02": 41,
+        "H06": 0,
+        "H01": 0,
+        "H0B": 1,
+        "H0C": 100,
+        "H04": 3500,
+    }
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        title="FanSync",
+        data={"email": "u@e.com", "password": "p", "verify_ssl": False},
+        unique_id="test-late-corke-profile",
+    )
+    entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+
+    state = hass.states.get("light.fansync_light")
+    assert state is not None
+    assert state.attributes.get("supported_color_modes") == ["brightness"]
+
+    mock_client.profile = {"esh": {"model": "Corke36-FD6R1L5"}}
+    await entry.runtime_data["coordinator"].async_request_refresh()
+    await hass.async_block_till_done()
+
+    state = hass.states.get("light.fansync_light")
+    assert state is not None
+    assert state.attributes.get("supported_color_modes") == ["color_temp"]
+    assert state.attributes.get("min_color_temp_kelvin") == 2700
+    assert state.attributes.get("max_color_temp_kelvin") == 5000
+    assert state.attributes.get("color_temp_kelvin") == 3500
+
+
 async def test_color_temp_unsupported_when_device_omits_h04(
     hass: HomeAssistant, mock_client, patch_client
 ) -> None:
